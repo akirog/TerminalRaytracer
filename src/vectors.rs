@@ -18,6 +18,21 @@ impl Vec3 {
     pub fn zero() -> Vec3 {
         Vec3 { x: 0.0, y: 0.0, z: 0.0 }
     }
+    
+    pub fn length(self) -> f32 { (self.x*self.x + self.y*self.y + self.z*self.z).sqrt() }
+    
+    pub fn normalized(self) -> Vec3 { self / self.length() }
+    
+    pub fn dot(self, other: Vec3) -> f32 { self.x * other.x + self.y * other.y + self.z * other.z }
+    
+    pub fn cross(self, other: Vec3) -> Vec3 { 
+        Vec3 { 
+            x: self.y * other.z - self.z * other.y, 
+            y: self.z * other.x - self.x * other.z, 
+            z: self.x * other.y - self.y * other.x 
+        } 
+    }
+    
 }
 
 impl Add for Vec3 {
@@ -33,6 +48,33 @@ impl AddAssign for Vec3 {
         self.x += rhs.x;
         self.y += rhs.y;
         self.z += rhs.z;
+    }
+}
+
+impl AddAssign<f32> for Vec3 {
+    fn add_assign(&mut self, rhs: f32) {
+        self.x += rhs;
+        self.y += rhs;
+        self.z += rhs;
+    }
+}
+
+
+
+
+impl SubAssign for Vec3 {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
+        self.z -= rhs.z;
+    }
+}
+
+impl SubAssign<f32> for Vec3 {
+    fn sub_assign(&mut self, rhs: f32) {
+        self.x -= rhs;
+        self.y -= rhs;
+        self.z -= rhs;
     }
 }
 
