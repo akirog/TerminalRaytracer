@@ -86,7 +86,7 @@ async fn main() {
         // Wrap mutable data in Arc<Mutex<>> for thread safety
         let pixels = Arc::new(Mutex::new(vec![Color::default(); width * height]));
 
-        let num_threads = 4; // Adjust based on your CPU cores
+        let num_threads = 4;
         let rows_per_thread = (height + num_threads - 1) / num_threads;
 
         let mut handles = vec![];
@@ -160,54 +160,145 @@ async fn main() {
 
 
 
+
+
 // --- Raycasting ---
 fn cast_ray(
     map: &[[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE],
-    mut pos: Vec3,
+    shoot_pos: Vec3,
     dir: Vec3,
 ) -> Color {
 
 
-    let step_size = 0.08;
-    let step = dir * step_size;
+    let mut pos: Vec3 = shoot_pos;
+    let steps = 4;
 
-    let mut dist: f32 = 0.0;
+    let mut hit_pos: Vec3 = Vec3::zero();
 
-    let steps = 50;
+
     // First check x borders
+    let step: Vec3 = dir * (1.0/dir.x);
+
+
     for _ in 0..steps {
-        pos += step;
-
-        dist += step_size;
-
-        // if pos.x < 0.0 || pos.x >= MAP_SIZE as f32 ||
-        //     pos.y < 0.0 || pos.y >= MAP_SIZE as f32 ||
-        //     pos.z < 0.0 || pos.z >= MAP_SIZE as f32 {
-        //     continue;
-        // }
-
-        let xi = pos.x as usize % MAP_SIZE;
-        let yi = pos.y as usize % MAP_SIZE;
-        let zi = pos.z as usize % MAP_SIZE;
-
-        if map[xi][yi][zi] > 0 {
-            // Map position to color
-            let grid_amount = 0.25;
-
-            let max_dist = steps as f32 * step_size;
-
-            let dist = (1.0-(dist/max_dist)).sqrt();
-
-            let dist = if dist < 0.0 {0.0} else {dist};
-            let r = ((pos.x % grid_amount) * 255.0 * (1.0 / grid_amount) * dist) as u8;
-            let g = ((pos.y % grid_amount) * 255.0 * (1.0 / grid_amount) * dist) as u8;
-            let b = ((pos.z % grid_amount) * 255.0 * (1.0 / grid_amount) * dist) as u8;
-            return Color::from_rgba(r, g, b, 255);
+        // Jump to first border
+        let old_pos = pos;
+        pos.x = pos.x + 0.5;
+        if dir.x > 0.0 {
+            pos.x = (pos.x + 0.6).floor();
+        } else {
+            pos.x = (pos.x - 0.6).floor();
         }
+
+        let distance_traveled: f32 = pos.x - old_pos.x;
+        let delta = step * distance_traveled;
+        pos.y = pos.y + delta.y;
+        pos.z = pos.z + delta.z;
+
+        let mut xi = pos.x.abs() as usize % MAP_SIZE;
+        let yi = pos.y.abs() as usize % MAP_SIZE;
+        let zi = pos.z.abs() as usize % MAP_SIZE;
+
+        if dir.x < 0.0 { xi -= 1; };
+
+        if map[xi][yi][zi] == 1 {
+            hit_pos = pos;
+            break;
+        }
+
     }
 
-    BLACK
+
+    // Then check y borders
+    pos = shoot_pos;
+
+    let step: Vec3 = dir * (1.0/dir.y);
+
+    for _ in 0..steps {
+        // Jump to first border
+        let old_pos = pos;
+        pos.y = (pos.y + 0.5);
+        if dir.y > 0.0 {
+            pos.y = (pos.y + 0.6).floor()
+        } else {
+            pos.y = (pos.y - 0.6).floor()
+        }
+
+        let distance_traveled: f32 = pos.y - old_pos.y;
+        let delta = step * distance_traveled;
+        pos.x = pos.x + delta.x;
+        pos.z = pos.z + delta.z;
+
+
+        let xi = pos.x.abs() as usize % MAP_SIZE;
+        let mut yi = pos.y.abs() as usize % MAP_SIZE;
+        let zi = pos.z.abs() as usize % MAP_SIZE;
+
+        if dir.y < 0.0 { yi -= 1; };
+
+
+        if map[xi][yi][zi] == 1 {
+            if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
+                hit_pos = pos;
+            }
+            break;
+        }
+
+    }
+
+
+    // Last check z
+    pos = shoot_pos;
+
+    let step: Vec3 = dir * (1.0/dir.z);
+
+
+    for _ in 0..steps {
+        // Jump to first border
+        let old_pos = pos;
+        pos.z = (pos.z + 0.5);
+        if dir.z > 0.0 {
+            pos.z = (pos.z + 0.6).floor()
+        } else {
+            pos.z = (pos.z - 0.6).floor()
+        }
+
+        let distance_traveled: f32 = pos.z - old_pos.z;
+        let delta = step * distance_traveled;
+        pos.x = pos.x + delta.x;
+        pos.y = pos.y + delta.y;
+
+
+        let xi = pos.x.abs() as usize % MAP_SIZE;
+        let yi = pos.y.abs() as usize % MAP_SIZE;
+        let mut zi = pos.z.abs() as usize % MAP_SIZE;
+
+        if dir.z < 0.0 { zi -= 1; };
+
+        if map[xi][yi][zi] == 1 {
+            if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
+                hit_pos = pos;
+            }
+            break;
+        }
+
+    }
+
+
+
+    let grid_thing = 0.25;
+
+    let r = (hit_pos.x % grid_thing) * 1.0/grid_thing * 255.0;
+    let g = (hit_pos.y % grid_thing) * 1.0/grid_thing * 255.0;
+    let b = (hit_pos.z % grid_thing) * 1.0/grid_thing * 255.0;
+
+    let hit_dist: f32 = (shoot_pos - hit_pos).length() * 1.0;
+
+    Color::from_rgba((r / hit_dist) as u8, (g / hit_dist) as u8, (b / hit_dist) as u8, 255)
 }
+
+
+
 
 // --- Map generation ---
 fn generate_map() -> [[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE] {
