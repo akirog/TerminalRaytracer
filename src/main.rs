@@ -2,9 +2,8 @@ extern crate core;
 
 use macroquad::prelude::*;
 
-use std::thread;
-use std::sync::{Arc, Mutex};
-
+use std::sync::{Arc};
+use rayon::prelude::*;
 
 pub mod vectors;
 mod my3d_lib;
@@ -15,8 +14,8 @@ use crate::my3d_lib::*;
 fn window_conf() -> Conf {
     Conf {
         window_title: "Macroquad Raytracer".to_owned(),
-        window_width: 500,
-        window_height: 500,
+        window_width: 700,
+        window_height: 700,
         ..Default::default()
     }
 }
@@ -82,61 +81,40 @@ async fn main() {
         let height = screen_height() as usize;
         let mut image = Image::gen_image_color(width as u16, height as u16, BLACK);
 
-        // Wrap mutable data in Arc<Mutex<>> for thread safety
-        let pixels = Arc::new(Mutex::new(vec![Color::default(); width * height]));
-
-        let num_threads = 4;
-        let rows_per_thread = (height + num_threads - 1) / num_threads;
-
-        let mut handles = vec![];
+        // Create pixel buffer
+        let mut pixels = vec![Color::default(); width * height];
 
 
-        for thread_id in 0..num_threads {
-            let pixels = Arc::clone(&pixels);
-            let world = Arc::clone(&world_arc);
+        let inv_width = 1.0 / width as f32;
+        let inv_height = 1.0 / height as f32;
 
 
-            let pos = pos;
+        // Parallel iteration over pixels
+        pixels.par_iter_mut()
+            .enumerate()
+            .for_each(|(index, pixel)| {
+                let x = index % width;
+                let y = index / width;
 
-            let start_row = thread_id * rows_per_thread;
-            let end_row = (start_row + rows_per_thread).min(height);
+                // Get from -0.5 to 0.5
+                let screen_x = (x as f32 * inv_width - 0.5) * 2.0;
+                let screen_y = (y as f32 * inv_height - 0.5) * 2.0;
 
-            let handle = thread::spawn(move || {
-                for y in start_row..end_row {
-                    for x in 0..width {
-                        // Get from -0.5 to 0.5
-                        let screen_x = ((x as f32 / width as f32) - 0.5) * 2.0;
-                        let screen_y = ((y as f32 / height as f32) - 0.5) * 2.0;
+                let mut dir = forward;
+                dir += right * screen_x * 1.0;
+                dir += up * screen_y * 1.0;
+                dir = dir.normalized();
 
-                        let mut dir = forward.clone();
+                let color = cast_ray_recursive(&world_arc, pos, dir, 1);
 
-                        dir += right * screen_x * 1.0;
-                        dir += up * screen_y * 1.0;
-
-                        dir = dir.normalized();
-
-                        let color = cast_ray_recursive(&world, pos, dir, 1);
-
-                        let mut pixels = pixels.lock().unwrap();
-                        pixels[y * width + x] = Color::new(color.x, color.y, color.z, 1.0);
-                    }
-                }
+                *pixel = Color::new(color.x, color.y, color.z, 1.0);
             });
 
-            handles.push(handle);
-        }
-
-        // Wait for all threads to finish
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Copy pixels back to image
-        let pixels = pixels.lock().unwrap();
-        for y in 0..height {
-            for x in 0..width {
-                image.set_pixel(x as u32, y as u32, pixels[y * width + x]);
-            }
+        // Copy pixels to image
+        for (i, pixel) in pixels.iter().enumerate() {
+            let x = i % width;
+            let y = i / width;
+            image.set_pixel(x as u32, y as u32, *pixel);
         }
 
 
@@ -178,9 +156,9 @@ fn cast_ray_recursive(
     if recursions == 0 {
         color
     } else {
-        let second_color = cast_ray_recursive(world, new_ray.position + (pos-new_ray.position) * 0.001, new_ray.reflected_dir, recursions - 1);
+        let second_color = cast_ray_recursive(world, new_ray.position, new_ray.reflected_dir, recursions - 1);
 
-        let amount_reflected = 0.1;
+        let amount_reflected = 0.3;
 
         let r = (color.x * (1.0-amount_reflected) + second_color.x * amount_reflected);
         let g = (color.y * (1.0-amount_reflected) + second_color.y * amount_reflected);
@@ -199,17 +177,88 @@ fn cast_ray(
     shoot_pos: Vec3,
     shoot_dir: Vec3,
 ) -> RayHit {
+    
+    let dir: Vec3 = shoot_dir;
 
 
-    let mut pos: Vec3 = shoot_pos;
-    let steps = 6;
+
 
     let mut hit = RayHit {
-        color: Vec3::new(1.0, 1.0, 1.0),
-        position: shoot_pos,
+        color: Vec3::zero(),
+        distance: 0.0,
+        position: Vec3::zero(),
         direction: shoot_dir,
         reflected_dir: Vec3::new(0.0, 0.0, 0.0),
     };
+
+    let mut shortest_distance = 1000.0;
+    let mut hit_tri: Option<&Triangle> = None;
+
+    for mesh in &world.meshes {
+        for tri in &mesh.triangles {
+            let normal = tri.normals[0];
+            let v0 = mesh.position + mesh.vertices[tri.indices[0]];
+            let v1 = mesh.position + mesh.vertices[tri.indices[1]];
+            let v2 = mesh.position + mesh.vertices[tri.indices[2]];
+
+            let dir_to_normal = dir.dot(normal);
+            if dir_to_normal > 0.001 { continue; } // almost parallel to the ray
+
+            let dist = (v0 - shoot_pos).dot(normal) / dir_to_normal;
+            if dist < 0.0 { continue; } // plane is behind us
+
+            if dist > shortest_distance { continue; }
+
+            let edge1 = v1 - v0;
+            let edge2 = v2 - v0;
+
+            let h = dir.cross(edge2);
+            let a = edge1.dot(h);
+
+            if a.abs() < 0.001 { continue; }
+
+            let  f = 1.0 / a;
+            let s = shoot_pos - v0;
+            let u = f * (s.dot(h));
+
+            if u < 0.0 || u > 1.0 { continue; }
+
+            let q = s.cross(edge1);
+            let v = f * (dir.dot(q));
+
+            if v < 0.0 || u + v > 1.0 { continue; }
+
+            shortest_distance = dist;
+            hit_tri = Some(tri);
+        }
+    }
+
+    if !hit_tri.is_some() { return RayHit::default() }
+
+    let hit_tri = hit_tri.unwrap();
+    hit.color = hit_tri.color;
+
+    let normal = hit_tri.normals[0];
+
+    let along_normal = normal * shoot_dir.dot(normal);
+    let along_tangent = shoot_dir - along_normal;
+
+    let jx = hash_f32(shortest_distance+0.1) - 0.5;
+    let jy = hash_f32(shortest_distance+0.2) - 0.5;
+    let jz = hash_f32(shortest_distance+0.3) - 0.5;
+
+    hit.reflected_dir = along_tangent - along_normal;
+    hit.reflected_dir += Vec3::new(jx, jy, jz) * 0.2;
+
+    hit.position = shoot_pos + shoot_dir * shortest_distance;
+
+
+    // Add an artificial sun thing for better lighting
+    let sun_dir = Vec3::new(-0.3, 0.5, 0.8).normalized();
+    let light = sun_dir.dot(normal)*-0.5 + 0.5;
+
+    hit.color *= light;
+
 
     hit
 }
@@ -221,10 +270,27 @@ fn cast_ray(
 fn generate_map() -> World {
     let mut world = World { meshes: vec![] };
 
-    // create a cube
-    world.meshes.push(make_cube(1.0));
+    // Floor
+    world.meshes.push(make_plane(10.0));
+
+    world.meshes[0].position = Vec3::new(0.0, 0.0, 1.0);
+    world.meshes[0].triangles[0].color = Vec3::new(1.0, 0.0, 0.0);
+    world.meshes[0].triangles[1].color = Vec3::new(1.0, 0.0, 0.0);
+
+    // A few cubes at different positions
+    let mut cube1 = make_cube(1.0);
+    cube1.position = Vec3::new(2.0, 2.0, 0.5);
+    world.meshes.push(cube1);
+
+    let mut cube2 = make_cube(0.5);
+    cube2.position = Vec3::new(-1.0, 3.0, 0.25);
+    for tri in &mut cube2.triangles {
+        tri.color = Vec3::new(0.0, 0.0, 1.0);
+    }
+    world.meshes.push(cube2);
 
     world
+
 }
 
 
@@ -245,14 +311,16 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
 
     let color = Vec3::new(1.0, 1.0, 1.0);
 
-    let mut triangles: Vec<my3d_lib::Triangle> = Vec::new();
+    let mut triangles: Vec<Triangle> = Vec::new();
 
     // helper to add a triangle by vertex indices and normal
     let mut add_tri = |a, b, c, normal: Vec3| {
-        triangles.push(my3d_lib::Triangle {
+        triangles.push(Triangle {
             indices: [a, b, c],
             normals: [normal; 3],
             color,
+            emission_strength: 0.0,
+            emission_color: color,
         });
     };
 
@@ -295,4 +363,39 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         position: Vec3::new(0.0, 0.0, 0.0),
         rotation: Vec3::new(0.0, 0.0, 0.0),
     }
+}
+
+
+fn make_plane(scale: f32) -> my3d_lib::Mesh {
+    let s = scale / 2.0;
+    let vertices = vec![
+        Vec3::new(-s, -s, 0.0),
+        Vec3::new(-s, s,  0.0),
+        Vec3::new( s, -s, 0.0),
+        Vec3::new( s, s,  0.0),
+    ];
+
+    let color = Vec3::new(1.0, 1.0, 1.0);
+    let mut triangles: Vec<Triangle> = Vec::new();
+
+    let normal = Vec3::new(0.0, 0.0, -1.0);
+
+    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, });
+    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color,  });
+
+
+    my3d_lib::Mesh { vertices, triangles, scale: Vec3::splat(1.0), position: Vec3::new(0.0, 0.0, 0.0), rotation: Vec3::new(0.0, 0.0, 0.0) }
+}
+
+
+
+fn hash_f32(x: f32) -> f32 {
+    let mut i = x.to_bits();
+    i ^= i >> 16;
+    i = i.wrapping_mul(0x7feb352d);
+    i ^= i >> 15;
+    i = i.wrapping_mul(0x846ca68b);
+    i ^= i >> 16;
+
+    (i as f32) / (u32::MAX as f32)
 }

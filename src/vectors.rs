@@ -12,6 +12,8 @@ pub struct Vec3 {
 impl Vec3 {
     pub fn new(x: f32, y: f32, z: f32) -> Vec3 { Vec3 { x, y, z } }
 
+    pub fn splat(v: f32) -> Vec3 { Vec3 { x: v, y: v, z: v } }
+
     pub fn zero() -> Vec3 {
         Vec3 { x: 0.0, y: 0.0, z: 0.0 }
     }
@@ -88,6 +90,15 @@ impl Mul<f32> for Vec3 {
     
     fn mul(self, rhs: f32) -> Self::Output {
         Vec3 { x: self.x * rhs, y: self.y * rhs, z: self.z * rhs }
+    }
+}
+
+
+impl MulAssign<f32> for Vec3 {
+    fn mul_assign(&mut self, rhs: f32) {
+        self.x *= rhs;
+        self.y *= rhs;
+        self.z *= rhs;
     }
 }
 
