@@ -103,3 +103,10 @@ impl Div<f32> for Vec3 {
         Vec3 {x: self.x / other, y: self.y / other, z: self.z / other}
     }
 }
+
+
+impl PartialEq for Vec3 {
+    fn eq(&self, other: &Vec3) -> bool {
+        self.x == other.x && self.y == other.y && self.z == other.z
+    }
+}

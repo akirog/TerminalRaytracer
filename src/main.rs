@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 
 mod vectors;
+mod My3dLib;
+
 use crate::vectors::Vec3;
 
 const MAP_SIZE: usize = 16;
@@ -116,7 +118,7 @@ async fn main() {
 
                         dir = dir.normalized();
 
-                        let color = cast_ray(&map, pos, dir);
+                        let color = cast_ray_recursive(&map, pos, dir, 1);
 
                         let mut pixels = pixels.lock().unwrap();
                         pixels[y * width + x] = color;
@@ -163,126 +165,168 @@ async fn main() {
 
 
 // --- Raycasting ---
+fn cast_ray_recursive(
+    map: &[[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE],
+    pos: Vec3,
+    dir: Vec3,
+    recursions: u8,
+) -> Color {
+    
+    let new_ray = cast_ray(map, pos, dir);
+
+    let mut color = new_ray.0;
+
+
+
+    if recursions == 0 {
+        color
+    } else {
+        let second_color = cast_ray_recursive(map, new_ray.1 + (pos-new_ray.1) * 0.001, new_ray.2, recursions - 1);
+
+        let amount_reflected = 0.3 ;
+
+        let r = ((color.r * (1.0-amount_reflected) + second_color.r * amount_reflected)*255.0) as u8;
+        let g = ((color.g * (1.0-amount_reflected) + second_color.g * amount_reflected)*255.0) as u8;
+        let b = ((color.b * (1.0-amount_reflected) + second_color.b * amount_reflected)*255.0) as u8;
+
+
+        color = Color::from_rgba(r, g, b, 255);
+
+        color
+    }
+}
+
+
 fn cast_ray(
     map: &[[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE],
     shoot_pos: Vec3,
-    dir: Vec3,
-) -> Color {
+    shoot_dir: Vec3,
+) -> (Color, Vec3, Vec3) {
 
 
     let mut pos: Vec3 = shoot_pos;
-    let steps = 4;
+    let steps = 6;
 
     let mut hit_pos: Vec3 = Vec3::zero();
 
 
-    // First check x borders
-    let step: Vec3 = dir * (1.0/dir.x);
 
 
-    for _ in 0..steps {
-        // Jump to first border
-        let old_pos = pos;
-        pos.x = pos.x + 0.5;
-        if dir.x > 0.0 {
-            pos.x = (pos.x + 0.6).floor();
-        } else {
-            pos.x = (pos.x - 0.6).floor();
+    if shoot_dir.x.abs() > 0.001 {
+        // First check x borders
+        let step: Vec3 = shoot_dir * (1.0/shoot_dir.x);
+
+        for _ in 0..steps {
+            // Jump to first border
+            let old_pos = pos;
+            pos.x = pos.x + 0.5;
+            if shoot_dir.x > 0.0 {
+                pos.x = (pos.x + 0.6).floor();
+            } else {
+                pos.x = (pos.x - 0.6).floor();
+            }
+
+            let distance_traveled: f32 = pos.x - old_pos.x;
+            let delta = step * distance_traveled;
+            pos.y = pos.y + delta.y;
+            pos.z = pos.z + delta.z;
+
+            let mut xi = pos.x.abs() as usize % MAP_SIZE;
+            let yi = pos.y.abs() as usize % MAP_SIZE;
+            let zi = pos.z.abs() as usize % MAP_SIZE;
+
+            if shoot_dir.x < 0.0 && xi > 0 { xi -= 1; };
+
+            if map[xi][yi][zi] == 1 {
+                hit_pos = pos;
+                break;
+            }
+
         }
-
-        let distance_traveled: f32 = pos.x - old_pos.x;
-        let delta = step * distance_traveled;
-        pos.y = pos.y + delta.y;
-        pos.z = pos.z + delta.z;
-
-        let mut xi = pos.x.abs() as usize % MAP_SIZE;
-        let yi = pos.y.abs() as usize % MAP_SIZE;
-        let zi = pos.z.abs() as usize % MAP_SIZE;
-
-        if dir.x < 0.0 { xi -= 1; };
-
-        if map[xi][yi][zi] == 1 {
-            hit_pos = pos;
-            break;
-        }
-
     }
 
 
+
     // Then check y borders
-    pos = shoot_pos;
+    if shoot_dir.y.abs() > 0.001 {
+        pos = shoot_pos;
 
-    let step: Vec3 = dir * (1.0/dir.y);
+        let step: Vec3 = shoot_dir * (1.0/shoot_dir.y);
 
-    for _ in 0..steps {
-        // Jump to first border
-        let old_pos = pos;
-        pos.y = (pos.y + 0.5);
-        if dir.y > 0.0 {
-            pos.y = (pos.y + 0.6).floor()
-        } else {
-            pos.y = (pos.y - 0.6).floor()
-        }
-
-        let distance_traveled: f32 = pos.y - old_pos.y;
-        let delta = step * distance_traveled;
-        pos.x = pos.x + delta.x;
-        pos.z = pos.z + delta.z;
-
-
-        let xi = pos.x.abs() as usize % MAP_SIZE;
-        let mut yi = pos.y.abs() as usize % MAP_SIZE;
-        let zi = pos.z.abs() as usize % MAP_SIZE;
-
-        if dir.y < 0.0 { yi -= 1; };
-
-
-        if map[xi][yi][zi] == 1 {
-            if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
-                hit_pos = pos;
+        for _ in 0..steps {
+            // Jump to first border
+            let old_pos = pos;
+            pos.y = (pos.y + 0.5);
+            if shoot_dir.y > 0.0 {
+                pos.y = (pos.y + 0.6).floor()
+            } else {
+                pos.y = (pos.y - 0.6).floor()
             }
-            break;
-        }
 
+            let distance_traveled: f32 = pos.y - old_pos.y;
+            let delta = step * distance_traveled;
+            pos.x = pos.x + delta.x;
+            pos.z = pos.z + delta.z;
+
+
+            let xi = pos.x.abs() as usize % MAP_SIZE;
+            let mut yi = pos.y.abs() as usize % MAP_SIZE;
+            let zi = pos.z.abs() as usize % MAP_SIZE;
+
+            if shoot_dir.y < 0.0 && yi > 0 { yi -= 1; };
+
+
+            if map[xi][yi][zi] == 1 {
+                if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
+                    hit_pos = pos;
+                }
+                break;
+            }
+
+        }
     }
 
 
     // Last check z
-    pos = shoot_pos;
-
-    let step: Vec3 = dir * (1.0/dir.z);
-
-
-    for _ in 0..steps {
-        // Jump to first border
-        let old_pos = pos;
-        pos.z = (pos.z + 0.5);
-        if dir.z > 0.0 {
-            pos.z = (pos.z + 0.6).floor()
-        } else {
-            pos.z = (pos.z - 0.6).floor()
-        }
-
-        let distance_traveled: f32 = pos.z - old_pos.z;
-        let delta = step * distance_traveled;
-        pos.x = pos.x + delta.x;
-        pos.y = pos.y + delta.y;
+    if shoot_dir.z.abs() > 0.001 {
+        pos = shoot_pos;
+        let step: Vec3 = shoot_dir * (1.0/shoot_dir.z);
 
 
-        let xi = pos.x.abs() as usize % MAP_SIZE;
-        let yi = pos.y.abs() as usize % MAP_SIZE;
-        let mut zi = pos.z.abs() as usize % MAP_SIZE;
-
-        if dir.z < 0.0 { zi -= 1; };
-
-        if map[xi][yi][zi] == 1 {
-            if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
-                hit_pos = pos;
+        for _ in 0..steps {
+            // Jump to first border
+            let old_pos = pos;
+            pos.z = (pos.z + 0.5);
+            if shoot_dir.z > 0.0 {
+                pos.z = (pos.z + 0.6).floor()
+            } else {
+                pos.z = (pos.z - 0.6).floor()
             }
-            break;
-        }
 
+            let distance_traveled: f32 = pos.z - old_pos.z;
+            let delta = step * distance_traveled;
+            pos.x = pos.x + delta.x;
+            pos.y = pos.y + delta.y;
+
+
+            let xi = pos.x.abs() as usize % MAP_SIZE;
+            let yi = pos.y.abs() as usize % MAP_SIZE;
+            let mut zi = pos.z.abs() as usize % MAP_SIZE;
+
+            if shoot_dir.z < 0.0 && zi > 0 { zi -= 1; };
+
+            if map[xi][yi][zi] == 1 {
+                if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
+                    hit_pos = pos;
+                }
+                break;
+            }
+
+        }
     }
+
+
+
 
 
 
@@ -293,8 +337,20 @@ fn cast_ray(
     let b = (hit_pos.z % grid_thing) * 1.0/grid_thing * 255.0;
 
     let hit_dist: f32 = (shoot_pos - hit_pos).length() * 1.0;
+    
+    let reflected_dir: Vec3 = if (hit_pos.x%1.0 == 0.0) {
+        Vec3::new(-shoot_dir.x, shoot_dir.y, shoot_dir.z)
+    } else if (hit_pos.y%1.0 == 0.0) {
+        Vec3::new(shoot_dir.x, -shoot_dir.y, shoot_dir.z)
+    } else {
+        Vec3::new(shoot_dir.x, shoot_dir.y, -shoot_dir.z)
+    };
 
-    Color::from_rgba((r / hit_dist) as u8, (g / hit_dist) as u8, (b / hit_dist) as u8, 255)
+
+
+    (Color::from_rgba((r / hit_dist) as u8, (g / hit_dist) as u8, (b / hit_dist) as u8, 255), 
+     hit_pos, 
+     reflected_dir)
 }
 
 
