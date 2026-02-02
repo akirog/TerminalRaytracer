@@ -160,9 +160,9 @@ fn cast_ray_recursive(
 
         let amount_reflected = 0.3;
 
-        let r = (color.x * (1.0-amount_reflected) + second_color.x * amount_reflected);
-        let g = (color.y * (1.0-amount_reflected) + second_color.y * amount_reflected);
-        let b = (color.z * (1.0-amount_reflected) + second_color.z * amount_reflected);
+        let r = second_color.x * color.x;
+        let g = second_color.y * color.y;
+        let b = second_color.z * color.z;
 
 
         color = Vec3::new(r, g, b);
@@ -177,14 +177,14 @@ fn cast_ray(
     shoot_pos: Vec3,
     shoot_dir: Vec3,
 ) -> RayHit {
-    
+
     let dir: Vec3 = shoot_dir;
 
 
 
 
     let mut hit = RayHit {
-        color: Vec3::zero(),
+        material: my3d_lib::Material::default(),
         distance: 0.0,
         position: Vec3::zero(),
         direction: shoot_dir,
@@ -243,12 +243,16 @@ fn cast_ray(
     let along_normal = normal * shoot_dir.dot(normal);
     let along_tangent = shoot_dir - along_normal;
 
-    let jx = hash_f32(shortest_distance+0.1) - 0.5;
-    let jy = hash_f32(shortest_distance+0.2) - 0.5;
-    let jz = hash_f32(shortest_distance+0.3) - 0.5;
-
     hit.reflected_dir = along_tangent - along_normal;
-    hit.reflected_dir += Vec3::new(jx, jy, jz) * 0.2;
+
+    // add roughness
+    if hit_tri.roughness != 0.0 {
+        let jx = hash_f32(shortest_distance+0.1) - 0.5;
+        let jy = hash_f32(shortest_distance+0.2) - 0.5;
+        let jz = hash_f32(shortest_distance+0.3) - 0.5;
+
+        hit.reflected_dir += Vec3::new(jx, jy, jz) * hit_tri.roughness;
+    }
 
     hit.position = shoot_pos + shoot_dir * shortest_distance;
 
@@ -321,6 +325,7 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
             color,
             emission_strength: 0.0,
             emission_color: color,
+            roughness: 0.0,
         });
     };
 
@@ -380,8 +385,8 @@ fn make_plane(scale: f32) -> my3d_lib::Mesh {
 
     let normal = Vec3::new(0.0, 0.0, -1.0);
 
-    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, });
-    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color,  });
+    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, roughness: 0.0 });
+    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, roughness: 0.0 });
 
 
     my3d_lib::Mesh { vertices, triangles, scale: Vec3::splat(1.0), position: Vec3::new(0.0, 0.0, 0.0), rotation: Vec3::new(0.0, 0.0, 0.0) }

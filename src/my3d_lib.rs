@@ -4,9 +4,25 @@ use crate::vectors::Vec3;
 pub struct Triangle {
     pub indices: [usize; 3],
     pub normals: [Vec3; 3],
+}
+
+
+pub struct Material {
     pub color: Vec3,
     pub emission_strength: f32,
     pub emission_color: Vec3,
+    pub roughness: f32,
+}
+
+impl Default for Material {
+    fn default() -> Material {
+        Material {
+            color: Vec3::default(),
+            emission_color: Vec3::default(),
+            emission_strength: 0.0,
+            roughness: 0.0,
+        }
+    }
 }
 
 pub struct Mesh {
@@ -15,6 +31,7 @@ pub struct Mesh {
     pub scale: Vec3,
     pub position: Vec3,
     pub rotation: Vec3,
+    pub material: Material,
 }
 
 
@@ -24,7 +41,7 @@ pub struct World {
 
 
 pub struct RayHit {
-    pub color: Vec3,
+    pub material: Material,
     pub distance: f32,
     pub position: Vec3,
     pub direction: Vec3,
@@ -34,7 +51,7 @@ pub struct RayHit {
 impl Default for RayHit {
     fn default() -> RayHit {
         RayHit {
-            color: Vec3::zero(),
+            material: Material::default(),
             distance: 0.0,
             position: Vec3::zero(),
             direction: Vec3::zero(),
