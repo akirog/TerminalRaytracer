@@ -1,5 +1,4 @@
 use std::ops::*;
-use std::process::Output;
 
 
 #[derive(Copy, Clone)]
@@ -11,9 +10,7 @@ pub struct Vec3 {
 
 
 impl Vec3 {
-    pub fn new(x: f32, y: f32, z: f32) -> Vec3 {
-        Vec3 { x, y, z }
-    }
+    pub fn new(x: f32, y: f32, z: f32) -> Vec3 { Vec3 { x, y, z } }
 
     pub fn zero() -> Vec3 {
         Vec3 { x: 0.0, y: 0.0, z: 0.0 }
@@ -32,7 +29,6 @@ impl Vec3 {
             z: self.x * other.y - self.y * other.x 
         } 
     }
-    
 }
 
 impl Add for Vec3 {

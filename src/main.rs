@@ -1,24 +1,20 @@
 extern crate core;
 
-use std::cmp::{max, min};
-use std::mem::forget;
-use std::ops::SubAssign;
 use macroquad::prelude::*;
 
 use std::thread;
 use std::sync::{Arc, Mutex};
 
 
-mod vectors;
-mod My3dLib;
+pub mod vectors;
+mod my3d_lib;
 
 use crate::vectors::Vec3;
-
-const MAP_SIZE: usize = 16;
+use crate::my3d_lib::*;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Macroquad Raymarcher".to_owned(),
+        window_title: "Macroquad Raytracer".to_owned(),
         window_width: 500,
         window_height: 500,
         ..Default::default()
@@ -28,14 +24,15 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     // Create map
-    let map = generate_map();
-    let map_arc = Arc::new(map); // Move map into Arc
+    let world: World  = generate_map();
+    let world_arc = Arc::new(world); // Move map into Arc
 
     // Player state
-    let mut pos = Vec3::new(8.5, 8.5, 8.5);
-    let speed: f32 = 2.0;
+    let mut pos = Vec3::new(0.0, 0.0, 0.0);
     let mut yaw: f32 = 0.0;
     let mut pitch: f32 = 0.0;
+
+    let speed: f32 = 2.0;
     let mouse_sensitivity: f32 = 0.2;
 
     // Hide cursor and capture
@@ -96,7 +93,7 @@ async fn main() {
 
         for thread_id in 0..num_threads {
             let pixels = Arc::clone(&pixels);
-            let map = Arc::clone(&map_arc);
+            let world = Arc::clone(&world_arc);
 
 
             let pos = pos;
@@ -118,10 +115,10 @@ async fn main() {
 
                         dir = dir.normalized();
 
-                        let color = cast_ray_recursive(&map, pos, dir, 1);
+                        let color = cast_ray_recursive(&world, pos, dir, 1);
 
                         let mut pixels = pixels.lock().unwrap();
-                        pixels[y * width + x] = color;
+                        pixels[y * width + x] = Color::new(color.x, color.y, color.z, 1.0);
                     }
                 }
             });
@@ -166,31 +163,31 @@ async fn main() {
 
 // --- Raycasting ---
 fn cast_ray_recursive(
-    map: &[[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE],
+    world: &World,
     pos: Vec3,
     dir: Vec3,
     recursions: u8,
-) -> Color {
+) -> Vec3 {
     
-    let new_ray = cast_ray(map, pos, dir);
+    let new_ray = cast_ray(world, pos, dir);
 
-    let mut color = new_ray.0;
+    let mut color = new_ray.color;
 
 
 
     if recursions == 0 {
         color
     } else {
-        let second_color = cast_ray_recursive(map, new_ray.1 + (pos-new_ray.1) * 0.001, new_ray.2, recursions - 1);
+        let second_color = cast_ray_recursive(world, new_ray.position + (pos-new_ray.position) * 0.001, new_ray.reflected_dir, recursions - 1);
 
-        let amount_reflected = 0.3 ;
+        let amount_reflected = 0.1;
 
-        let r = ((color.r * (1.0-amount_reflected) + second_color.r * amount_reflected)*255.0) as u8;
-        let g = ((color.g * (1.0-amount_reflected) + second_color.g * amount_reflected)*255.0) as u8;
-        let b = ((color.b * (1.0-amount_reflected) + second_color.b * amount_reflected)*255.0) as u8;
+        let r = (color.x * (1.0-amount_reflected) + second_color.x * amount_reflected);
+        let g = (color.y * (1.0-amount_reflected) + second_color.y * amount_reflected);
+        let b = (color.z * (1.0-amount_reflected) + second_color.z * amount_reflected);
 
 
-        color = Color::from_rgba(r, g, b, 255);
+        color = Vec3::new(r, g, b);
 
         color
     }
@@ -198,180 +195,119 @@ fn cast_ray_recursive(
 
 
 fn cast_ray(
-    map: &[[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE],
+    world: &World,
     shoot_pos: Vec3,
     shoot_dir: Vec3,
-) -> (Color, Vec3, Vec3) {
+) -> RayHit {
 
 
     let mut pos: Vec3 = shoot_pos;
     let steps = 6;
 
-    let mut hit_pos: Vec3 = Vec3::zero();
-
-
-
-
-    if shoot_dir.x.abs() > 0.001 {
-        // First check x borders
-        let step: Vec3 = shoot_dir * (1.0/shoot_dir.x);
-
-        for _ in 0..steps {
-            // Jump to first border
-            let old_pos = pos;
-            pos.x = pos.x + 0.5;
-            if shoot_dir.x > 0.0 {
-                pos.x = (pos.x + 0.6).floor();
-            } else {
-                pos.x = (pos.x - 0.6).floor();
-            }
-
-            let distance_traveled: f32 = pos.x - old_pos.x;
-            let delta = step * distance_traveled;
-            pos.y = pos.y + delta.y;
-            pos.z = pos.z + delta.z;
-
-            let mut xi = pos.x.abs() as usize % MAP_SIZE;
-            let yi = pos.y.abs() as usize % MAP_SIZE;
-            let zi = pos.z.abs() as usize % MAP_SIZE;
-
-            if shoot_dir.x < 0.0 && xi > 0 { xi -= 1; };
-
-            if map[xi][yi][zi] == 1 {
-                hit_pos = pos;
-                break;
-            }
-
-        }
-    }
-
-
-
-    // Then check y borders
-    if shoot_dir.y.abs() > 0.001 {
-        pos = shoot_pos;
-
-        let step: Vec3 = shoot_dir * (1.0/shoot_dir.y);
-
-        for _ in 0..steps {
-            // Jump to first border
-            let old_pos = pos;
-            pos.y = (pos.y + 0.5);
-            if shoot_dir.y > 0.0 {
-                pos.y = (pos.y + 0.6).floor()
-            } else {
-                pos.y = (pos.y - 0.6).floor()
-            }
-
-            let distance_traveled: f32 = pos.y - old_pos.y;
-            let delta = step * distance_traveled;
-            pos.x = pos.x + delta.x;
-            pos.z = pos.z + delta.z;
-
-
-            let xi = pos.x.abs() as usize % MAP_SIZE;
-            let mut yi = pos.y.abs() as usize % MAP_SIZE;
-            let zi = pos.z.abs() as usize % MAP_SIZE;
-
-            if shoot_dir.y < 0.0 && yi > 0 { yi -= 1; };
-
-
-            if map[xi][yi][zi] == 1 {
-                if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
-                    hit_pos = pos;
-                }
-                break;
-            }
-
-        }
-    }
-
-
-    // Last check z
-    if shoot_dir.z.abs() > 0.001 {
-        pos = shoot_pos;
-        let step: Vec3 = shoot_dir * (1.0/shoot_dir.z);
-
-
-        for _ in 0..steps {
-            // Jump to first border
-            let old_pos = pos;
-            pos.z = (pos.z + 0.5);
-            if shoot_dir.z > 0.0 {
-                pos.z = (pos.z + 0.6).floor()
-            } else {
-                pos.z = (pos.z - 0.6).floor()
-            }
-
-            let distance_traveled: f32 = pos.z - old_pos.z;
-            let delta = step * distance_traveled;
-            pos.x = pos.x + delta.x;
-            pos.y = pos.y + delta.y;
-
-
-            let xi = pos.x.abs() as usize % MAP_SIZE;
-            let yi = pos.y.abs() as usize % MAP_SIZE;
-            let mut zi = pos.z.abs() as usize % MAP_SIZE;
-
-            if shoot_dir.z < 0.0 && zi > 0 { zi -= 1; };
-
-            if map[xi][yi][zi] == 1 {
-                if (shoot_pos - hit_pos).length() > (shoot_pos - pos).length() {
-                    hit_pos = pos;
-                }
-                break;
-            }
-
-        }
-    }
-
-
-
-
-
-
-    let grid_thing = 0.25;
-
-    let r = (hit_pos.x % grid_thing) * 1.0/grid_thing * 255.0;
-    let g = (hit_pos.y % grid_thing) * 1.0/grid_thing * 255.0;
-    let b = (hit_pos.z % grid_thing) * 1.0/grid_thing * 255.0;
-
-    let hit_dist: f32 = (shoot_pos - hit_pos).length() * 1.0;
-    
-    let reflected_dir: Vec3 = if (hit_pos.x%1.0 == 0.0) {
-        Vec3::new(-shoot_dir.x, shoot_dir.y, shoot_dir.z)
-    } else if (hit_pos.y%1.0 == 0.0) {
-        Vec3::new(shoot_dir.x, -shoot_dir.y, shoot_dir.z)
-    } else {
-        Vec3::new(shoot_dir.x, shoot_dir.y, -shoot_dir.z)
+    let mut hit = RayHit {
+        color: Vec3::new(1.0, 1.0, 1.0),
+        position: shoot_pos,
+        direction: shoot_dir,
+        reflected_dir: Vec3::new(0.0, 0.0, 0.0),
     };
 
-
-
-    (Color::from_rgba((r / hit_dist) as u8, (g / hit_dist) as u8, (b / hit_dist) as u8, 255), 
-     hit_pos, 
-     reflected_dir)
+    hit
 }
 
 
 
 
 // --- Map generation ---
-fn generate_map() -> [[[u8; MAP_SIZE]; MAP_SIZE]; MAP_SIZE] {
-    let mut map = [[[0; MAP_SIZE]; MAP_SIZE]; MAP_SIZE];
+fn generate_map() -> World {
+    let mut world = World { meshes: vec![] };
 
-    for x in 0..MAP_SIZE {
-        for y in 0..MAP_SIZE {
-            for z in 0..MAP_SIZE {
-                if x != 16 || z != 16 {
-                    let val = ::rand::random::<u8>();
-                    map[x][y][z] = if val < 200 {0} else {1};
-                } else {
-                    map[x][y][z] = 0;
-                }
-            }
-        }
+    // create a cube
+    world.meshes.push(make_cube(1.0));
+
+    world
+}
+
+
+
+pub struct Triangle {
+    pub indices: [usize; 3],
+    pub normals: [Vec3; 3],
+    pub color: Vec3,
+}
+
+pub struct Mesh {
+    pub vertices: Vec<Vec3>,
+    pub triangles: Vec<Triangle>,
+    pub scale: Vec3,
+    pub position: Vec3,
+    pub rotation: Vec3,
+}
+
+pub fn make_cube(size: f32) -> my3d_lib::Mesh {
+    let s = size / 2.0;
+
+    // 8 cube corners
+    let vertices = vec![
+        Vec3::new(-s, -s, -s), // 0
+        Vec3::new( s, -s, -s), // 1
+        Vec3::new( s,  s, -s), // 2
+        Vec3::new(-s,  s, -s), // 3
+        Vec3::new(-s, -s,  s), // 4
+        Vec3::new( s, -s,  s), // 5
+        Vec3::new( s,  s,  s), // 6
+        Vec3::new(-s,  s,  s), // 7
+    ];
+
+    let color = Vec3::new(1.0, 1.0, 1.0);
+
+    let mut triangles: Vec<my3d_lib::Triangle> = Vec::new();
+
+    // helper to add a triangle by vertex indices and normal
+    let mut add_tri = |a, b, c, normal: Vec3| {
+        triangles.push(my3d_lib::Triangle {
+            indices: [a, b, c],
+            normals: [normal; 3],
+            color,
+        });
+    };
+
+    // Face normals
+    let n_front  = Vec3::new(0.0, 0.0, 1.0);
+    let n_back   = Vec3::new(0.0, 0.0, -1.0);
+    let n_left   = Vec3::new(-1.0, 0.0, 0.0);
+    let n_right  = Vec3::new(1.0, 0.0, 0.0);
+    let n_top    = Vec3::new(0.0, 1.0, 0.0);
+    let n_bottom = Vec3::new(0.0, -1.0, 0.0);
+
+    // Front (+Z)
+    add_tri(4, 5, 6, n_front);
+    add_tri(4, 6, 7, n_front);
+
+    // Back (-Z)
+    add_tri(1, 0, 3, n_back);
+    add_tri(1, 3, 2, n_back);
+
+    // Left (-X)
+    add_tri(0, 4, 7, n_left);
+    add_tri(0, 7, 3, n_left);
+
+    // Right (+X)
+    add_tri(5, 1, 2, n_right);
+    add_tri(5, 2, 6, n_right);
+
+    // Top (+Y)
+    add_tri(3, 7, 6, n_top);
+    add_tri(3, 6, 2, n_top);
+
+    // Bottom (-Y)
+    add_tri(0, 1, 5, n_bottom);
+    add_tri(0, 5, 4, n_bottom);
+
+    my3d_lib::Mesh {
+        vertices,
+        triangles,
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        position: Vec3::new(0.0, 0.0, 0.0),
+        rotation: Vec3::new(0.0, 0.0, 0.0),
     }
-
-    map
 }
