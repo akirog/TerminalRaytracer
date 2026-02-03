@@ -15,8 +15,8 @@ use crate::my3d_lib::*;
 fn window_conf() -> Conf {
     Conf {
         window_title: "Macroquad Raytracer".to_owned(),
-        window_width: 700,
-        window_height: 400,
+        window_width: 300,
+        window_height: 200,
         ..Default::default()
     }
 }
@@ -130,7 +130,7 @@ async fn main() {
                 dir += up * screen_y * 1.0;
                 dir = dir.normalized();
 
-                let color = cast_ray_recursive(&world_arc, pos, dir, 3);
+                let color = cast_ray_recursive(&world_arc, pos, dir, 2);
 
                 *pixel = Color::new(color.x, color.y, color.z, 1.0);
             });
@@ -173,6 +173,7 @@ async fn main() {
         // if debug is on draw some debug stuff
         if debug_info {
             draw_text(&*format!("Sample count: {}", sample_count), 5.0, 20.0, 20.0, WHITE);
+            draw_text(&*format!("FPS: {}", get_fps()), 5.0, 40.0, 20.0, WHITE);
         }
 
         next_frame().await;
@@ -338,18 +339,29 @@ fn generate_map() -> World {
     world.meshes.push(cube1);
 
     let mut cube2 = make_cube(0.5);
-    cube2.position = Vec3::new(-2.0, 3.0, 0.25);
+    cube2.position = Vec3::new(-2.0, 3.0, -0.2);
     cube2.material.emission_color = Vec3::new(1.0, 1.0, 1.0);
-    cube2.material.emission_strength = 4.0;
+    cube2.material.emission_strength = 6.0;
 
     world.meshes.push(cube2);
 
     let mut cube3 = make_cube(1.0);
     cube3.position = Vec3::new(-1.0, -2.0, 0.5);
-    cube3.material.emission_color = Vec3::new(0.2, 0.2, 1.0);
-    cube3.material.emission_strength = 2.0;
+    cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
+    cube3.material.emission_color = Vec3::new(0.0, 1.0, 0.0);
+    cube3.material.emission_strength = 3.0;
 
     world.meshes.push(cube3);
+
+
+    let mut cube3 = make_cube(1.0);
+    cube3.position = Vec3::new(-1.0, -4.0, 0.5);
+    cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
+    cube3.material.emission_color = Vec3::new(1.0, 0.0, 0.0);
+    cube3.material.emission_strength = 3.0;
+
+    world.meshes.push(cube3);
+
 
     let mut cube4 = make_cube(1.0);
     cube4.position = Vec3::new(2.0, 3.2, 0.5);
@@ -440,7 +452,7 @@ fn make_plane(scale: f32) -> my3d_lib::Mesh {
         Vec3::new( s, -s, 0.0),
         Vec3::new( s, s,  0.0),
     ];
-    
+
     let mut triangles: Vec<Triangle> = Vec::new();
 
     let normal = Vec3::new(0.0, 0.0, -1.0);
