@@ -7,17 +7,25 @@ pub struct Triangle {
 }
 
 
+#[derive(Copy, Clone)]
 pub struct Material {
-    pub color: Vec3,
+    /// A materials ability to reflect light
+    pub albedo: Vec3,
+
+    /// How much light the material emits
     pub emission_strength: f32,
+
+    /// The color of emitted light
     pub emission_color: Vec3,
+
+    /// How much reflected rays are scattered
     pub roughness: f32,
 }
 
 impl Default for Material {
     fn default() -> Material {
         Material {
-            color: Vec3::default(),
+            albedo: Vec3::new(1.0, 1.0, 1.0),
             emission_color: Vec3::default(),
             emission_strength: 0.0,
             roughness: 0.0,

@@ -3,6 +3,7 @@ extern crate core;
 use macroquad::prelude::*;
 
 use std::sync::{Arc};
+use std::sync::atomic::{AtomicU32, Ordering};
 use rayon::prelude::*;
 
 pub mod vectors;
@@ -15,10 +16,14 @@ fn window_conf() -> Conf {
     Conf {
         window_title: "Macroquad Raytracer".to_owned(),
         window_width: 700,
-        window_height: 700,
+        window_height: 400,
         ..Default::default()
     }
 }
+
+
+static FRAME: AtomicU32 = AtomicU32::new(0);
+
 
 #[macroquad::main(window_conf)]
 async fn main() {
@@ -38,9 +43,22 @@ async fn main() {
     set_cursor_grab(true);
     show_mouse(false);
 
+
+    let width = screen_width() as usize;
+    let height = screen_height() as usize;
+    let width_ratio = width as f32 / height as f32;
+
+    let mut accumulation_buffer = vec![Vec3::zero(); width * height];
+    let mut sample_count = 0u32;
+
+    let mut debug_info: bool = true;
+
+
     loop {
         clear_background(BLACK);
 
+        // Update frame
+        let frame = FRAME.fetch_add(1, Ordering::Relaxed);
 
 
         // --- Input ---
@@ -74,11 +92,17 @@ async fn main() {
 
         if is_key_down(KeyCode::Escape) { break; }
 
+        if is_key_pressed(KeyCode::G) { debug_info ^= true; };
+
+
+        if get_keys_down().len() > 0 || mouse_delta_position() != Vec2::default() {
+            // Reset accumulation
+            accumulation_buffer = vec![Vec3::zero(); width * height];
+            sample_count = 0;
+        }
 
 
         // --- Rendering ---
-        let width = screen_width() as usize;
-        let height = screen_height() as usize;
         let mut image = Image::gen_image_color(width as u16, height as u16, BLACK);
 
         // Create pixel buffer
@@ -97,25 +121,40 @@ async fn main() {
                 let y = index / width;
 
                 // Get from -0.5 to 0.5
-                let screen_x = (x as f32 * inv_width - 0.5) * 2.0;
+                let screen_x = (x as f32 * inv_width - 0.5) * 2.0 * width_ratio;
                 let screen_y = (y as f32 * inv_height - 0.5) * 2.0;
+
 
                 let mut dir = forward;
                 dir += right * screen_x * 1.0;
                 dir += up * screen_y * 1.0;
                 dir = dir.normalized();
 
-                let color = cast_ray_recursive(&world_arc, pos, dir, 1);
+                let color = cast_ray_recursive(&world_arc, pos, dir, 3);
 
                 *pixel = Color::new(color.x, color.y, color.z, 1.0);
             });
 
+        sample_count += 1;
+
         // Copy pixels to image
         for (i, pixel) in pixels.iter().enumerate() {
+            // Add to accumulation buffer
+            accumulation_buffer[i].x += pixel.r;
+            accumulation_buffer[i].y += pixel.g;
+            accumulation_buffer[i].z += pixel.b;
+
+            // Compute average
+            let avg = accumulation_buffer[i] / (sample_count as f32);
+
             let x = i % width;
             let y = i / width;
-            image.set_pixel(x as u32, y as u32, *pixel);
+            image.set_pixel(x as u32, y as u32,
+                            Color::new(avg.x, avg.y, avg.z, 1.0)
+            );
         }
+
+
 
 
         // Draw image to screen
@@ -131,10 +170,14 @@ async fn main() {
             },
         );
 
+        // if debug is on draw some debug stuff
+        if debug_info {
+            draw_text(&*format!("Sample count: {}", sample_count), 5.0, 20.0, 20.0, WHITE);
+        }
+
         next_frame().await;
     }
 }
-
 
 
 
@@ -149,25 +192,25 @@ fn cast_ray_recursive(
     
     let new_ray = cast_ray(world, pos, dir);
 
-    let mut color = new_ray.color;
-
 
 
     if recursions == 0 {
-        color
+        // If this is the last thing we hit we only return the light it emits since no further light could hit it
+        new_ray.material.emission_color * new_ray.material.emission_strength
+
     } else {
-        let second_color = cast_ray_recursive(world, new_ray.position, new_ray.reflected_dir, recursions - 1);
+        // Here we get the color of the light ray when it hits us
+        let received_color = cast_ray_recursive(world, new_ray.position, new_ray.reflected_dir, recursions - 1);
 
-        let amount_reflected = 0.3;
+        // The amount of light this ray now has is the light we just got times our albedo, aka how much we reflect
+        let mut color = received_color * new_ray.material.albedo;
 
-        let r = second_color.x * color.x;
-        let g = second_color.y * color.y;
-        let b = second_color.z * color.z;
+        let emitted_light = new_ray.material.emission_color * new_ray.material.emission_strength;
+
+        color = color + emitted_light;
 
 
-        color = Vec3::new(r, g, b);
-
-        color
+        Vec3::new(color.x, color.y, color.z)
     }
 }
 
@@ -230,14 +273,14 @@ fn cast_ray(
 
             shortest_distance = dist;
             hit_tri = Some(tri);
+            hit.material = mesh.material;
         }
     }
 
     if !hit_tri.is_some() { return RayHit::default() }
 
-    let hit_tri = hit_tri.unwrap();
-    hit.color = hit_tri.color;
 
+    let hit_tri = hit_tri.unwrap();
     let normal = hit_tri.normals[0];
 
     let along_normal = normal * shoot_dir.dot(normal);
@@ -246,23 +289,29 @@ fn cast_ray(
     hit.reflected_dir = along_tangent - along_normal;
 
     // add roughness
-    if hit_tri.roughness != 0.0 {
-        let jx = hash_f32(shortest_distance+0.1) - 0.5;
-        let jy = hash_f32(shortest_distance+0.2) - 0.5;
-        let jz = hash_f32(shortest_distance+0.3) - 0.5;
+    if hit.material.roughness != 0.0 {
+        let roughness = hit.material.roughness * hit.material.roughness;
 
-        hit.reflected_dir += Vec3::new(jx, jy, jz) * hit_tri.roughness;
+
+        let frame = FRAME.load(Ordering::Relaxed);
+        let seed =
+            frame * 1973 ^
+            (shoot_dir.x.abs() * 1832.4) as u32 ^
+            (shoot_dir.y.abs() * 5896.9) as u32 ^
+            (shoot_dir.z.abs() * 98231.2) as u32;
+
+
+        let mut random_dir = random_vec3(seed);
+
+        if random_dir.dot(normal) < 0.0 {
+            random_dir = random_dir * -1.0;
+        }
+
+        hit.reflected_dir = hit.reflected_dir + (random_dir - hit.reflected_dir) * roughness;
+        hit.reflected_dir = hit.reflected_dir.normalized();
     }
 
     hit.position = shoot_pos + shoot_dir * shortest_distance;
-
-
-    // Add an artificial sun thing for better lighting
-    let sun_dir = Vec3::new(-0.3, 0.5, 0.8).normalized();
-    let light = sun_dir.dot(normal)*-0.5 + 0.5;
-
-    hit.color *= light;
-
 
     hit
 }
@@ -278,23 +327,40 @@ fn generate_map() -> World {
     world.meshes.push(make_plane(10.0));
 
     world.meshes[0].position = Vec3::new(0.0, 0.0, 1.0);
-    world.meshes[0].triangles[0].color = Vec3::new(1.0, 0.0, 0.0);
-    world.meshes[0].triangles[1].color = Vec3::new(1.0, 0.0, 0.0);
+    world.meshes[0].material.albedo = Vec3::new(0.8, 0.8, 0.8);
+    world.meshes[0].material.roughness = 1.0;
 
-    // A few cubes at different positions
+    // A few cubes
     let mut cube1 = make_cube(1.0);
     cube1.position = Vec3::new(2.0, 2.0, 0.5);
+    cube1.material.albedo = Vec3::new(1.0, 0.0, 0.0);
+    cube1.material.roughness = 0.2;
     world.meshes.push(cube1);
 
     let mut cube2 = make_cube(0.5);
-    cube2.position = Vec3::new(-1.0, 3.0, 0.25);
-    for tri in &mut cube2.triangles {
-        tri.color = Vec3::new(0.0, 0.0, 1.0);
-    }
+    cube2.position = Vec3::new(-2.0, 3.0, 0.25);
+    cube2.material.emission_color = Vec3::new(1.0, 1.0, 1.0);
+    cube2.material.emission_strength = 4.0;
+
     world.meshes.push(cube2);
 
-    world
+    let mut cube3 = make_cube(1.0);
+    cube3.position = Vec3::new(-1.0, -2.0, 0.5);
+    cube3.material.emission_color = Vec3::new(0.2, 0.2, 1.0);
+    cube3.material.emission_strength = 2.0;
 
+    world.meshes.push(cube3);
+
+    let mut cube4 = make_cube(1.0);
+    cube4.position = Vec3::new(2.0, 3.2, 0.5);
+    cube4.material.albedo = Vec3::new(0.2, 1.0, 0.1);
+    cube4.material.roughness = 0.1;
+    cube4.material.emission_color = Vec3::new(0.2, 1.0, 0.2);
+    cube4.material.emission_strength = 1.0;
+    world.meshes.push(cube4);
+
+
+    world
 }
 
 
@@ -313,8 +379,6 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         Vec3::new(-s,  s,  s), // 7
     ];
 
-    let color = Vec3::new(1.0, 1.0, 1.0);
-
     let mut triangles: Vec<Triangle> = Vec::new();
 
     // helper to add a triangle by vertex indices and normal
@@ -322,10 +386,6 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         triangles.push(Triangle {
             indices: [a, b, c],
             normals: [normal; 3],
-            color,
-            emission_strength: 0.0,
-            emission_color: color,
-            roughness: 0.0,
         });
     };
 
@@ -367,6 +427,7 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         scale: Vec3::new(1.0, 1.0, 1.0),
         position: Vec3::new(0.0, 0.0, 0.0),
         rotation: Vec3::new(0.0, 0.0, 0.0),
+        material: my3d_lib::Material::default(),
     }
 }
 
@@ -379,28 +440,47 @@ fn make_plane(scale: f32) -> my3d_lib::Mesh {
         Vec3::new( s, -s, 0.0),
         Vec3::new( s, s,  0.0),
     ];
-
-    let color = Vec3::new(1.0, 1.0, 1.0);
+    
     let mut triangles: Vec<Triangle> = Vec::new();
 
     let normal = Vec3::new(0.0, 0.0, -1.0);
 
-    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, roughness: 0.0 });
-    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal], color, emission_strength: 0.0, emission_color: color, roughness: 0.0 });
+    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal] });
+    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal] });
 
 
-    my3d_lib::Mesh { vertices, triangles, scale: Vec3::splat(1.0), position: Vec3::new(0.0, 0.0, 0.0), rotation: Vec3::new(0.0, 0.0, 0.0) }
+    my3d_lib::Mesh {
+        vertices,
+        triangles,
+        scale: Vec3::splat(1.0),
+        position: Vec3::new(0.0, 0.0, 0.0),
+        rotation: Vec3::new(0.0, 0.0, 0.0),
+        material: my3d_lib::Material::default(),
+    }
 }
 
 
 
-fn hash_f32(x: f32) -> f32 {
-    let mut i = x.to_bits();
-    i ^= i >> 16;
-    i = i.wrapping_mul(0x7feb352d);
-    i ^= i >> 15;
-    i = i.wrapping_mul(0x846ca68b);
-    i ^= i >> 16;
+#[inline(always)]
+fn hash_u32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846ca68b);
+    x ^= x >> 16;
+    x
+}
 
-    (i as f32) / (u32::MAX as f32)
+#[inline(always)]
+fn hash_f32(x: u32) -> f32 {
+    (hash_u32(x) as f32) * (1.0 / u32::MAX as f32)
+}
+
+
+fn random_vec3(seed: u32) -> Vec3 {
+    let x = hash_f32(seed ^ 0xA2C79B3D) * 2.0 - 1.0;
+    let y = hash_f32(seed ^ 0xC3E5F7A1) * 2.0 - 1.0;
+    let z = hash_f32(seed ^ 0xB492F11D) * 2.0 - 1.0;
+
+    Vec3::new(x, y, z)
 }
