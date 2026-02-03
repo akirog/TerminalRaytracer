@@ -8,6 +8,7 @@ use rayon::prelude::*;
 
 pub mod vectors;
 mod my3d_lib;
+mod obj_parser;
 
 use crate::vectors::Vec3;
 use crate::my3d_lib::*;
@@ -15,8 +16,8 @@ use crate::my3d_lib::*;
 fn window_conf() -> Conf {
     Conf {
         window_title: "Macroquad Raytracer".to_owned(),
-        window_width: 300,
-        window_height: 200,
+        window_width: 600,
+        window_height: 300,
         ..Default::default()
     }
 }
@@ -145,7 +146,7 @@ async fn main() {
             accumulation_buffer[i].z += pixel.b;
 
             // Compute average
-            let avg = accumulation_buffer[i] / (sample_count as f32);
+            let avg = accumulation_buffer[i] / (sample_count as f32 * 0.5);
 
             let x = i % width;
             let y = i / width;
@@ -236,7 +237,7 @@ fn cast_ray(
     };
 
     let mut shortest_distance = 1000.0;
-    let mut hit_tri: Option<&Triangle> = None;
+    let mut hit_tri: Option<&Face> = None;
 
     for mesh in &world.meshes {
         for tri in &mesh.triangles {
@@ -299,7 +300,7 @@ fn cast_ray(
             frame * 1973 ^
             (shoot_dir.x.abs() * 1832.4) as u32 ^
             (shoot_dir.y.abs() * 5896.9) as u32 ^
-            (shoot_dir.z.abs() * 98231.2) as u32;
+            (shoot_dir.z.abs() * 9231.2) as u32;
 
 
         let mut random_dir = random_vec3(seed);
@@ -328,7 +329,7 @@ fn generate_map() -> World {
     world.meshes.push(make_plane(10.0));
 
     world.meshes[0].position = Vec3::new(0.0, 0.0, 1.0);
-    world.meshes[0].material.albedo = Vec3::new(0.8, 0.8, 0.8);
+    world.meshes[0].material.albedo = Vec3::new(0.22, 0.5, 0.02);
     world.meshes[0].material.roughness = 1.0;
 
     // A few cubes
@@ -339,9 +340,9 @@ fn generate_map() -> World {
     world.meshes.push(cube1);
 
     let mut cube2 = make_cube(0.5);
-    cube2.position = Vec3::new(-2.0, 3.0, -0.2);
+    cube2.position = Vec3::new(-1.0, 2.0, -0.2);
     cube2.material.emission_color = Vec3::new(1.0, 1.0, 1.0);
-    cube2.material.emission_strength = 6.0;
+    cube2.material.emission_strength = 10.0;
 
     world.meshes.push(cube2);
 
@@ -367,9 +368,13 @@ fn generate_map() -> World {
     cube4.position = Vec3::new(2.0, 3.2, 0.5);
     cube4.material.albedo = Vec3::new(0.2, 1.0, 0.1);
     cube4.material.roughness = 0.1;
-    cube4.material.emission_color = Vec3::new(0.2, 1.0, 0.2);
+    cube4.material.emission_color = Vec3::new(0.4, 1.0, 0.4);
     cube4.material.emission_strength = 1.0;
     world.meshes.push(cube4);
+
+
+    // Add a .obj file
+    world.meshes.push( obj_parser::parse("src/models/sphere.obj") );
 
 
     world
@@ -391,11 +396,11 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         Vec3::new(-s,  s,  s), // 7
     ];
 
-    let mut triangles: Vec<Triangle> = Vec::new();
+    let mut triangles: Vec<Face> = Vec::new();
 
     // helper to add a triangle by vertex indices and normal
     let mut add_tri = |a, b, c, normal: Vec3| {
-        triangles.push(Triangle {
+        triangles.push(Face {
             indices: [a, b, c],
             normals: [normal; 3],
         });
@@ -453,12 +458,12 @@ fn make_plane(scale: f32) -> my3d_lib::Mesh {
         Vec3::new( s, s,  0.0),
     ];
 
-    let mut triangles: Vec<Triangle> = Vec::new();
+    let mut triangles: Vec<Face> = Vec::new();
 
     let normal = Vec3::new(0.0, 0.0, -1.0);
 
-    triangles.push(Triangle { indices: [0, 1, 2], normals: [normal, normal, normal] });
-    triangles.push(Triangle { indices: [3, 1, 2], normals: [normal, normal, normal] });
+    triangles.push(Face { indices: [0, 1, 2], normals: [normal, normal, normal] });
+    triangles.push(Face { indices: [3, 1, 2], normals: [normal, normal, normal] });
 
 
     my3d_lib::Mesh {

@@ -1,9 +1,18 @@
 use crate::vectors::Vec3;
 
 
-pub struct Triangle {
+pub struct Face {
     pub indices: [usize; 3],
     pub normals: [Vec3; 3],
+}
+
+impl Default for Face {
+    fn default() -> Self {
+        Self {
+            indices: [0; 3],
+            normals: [Vec3::zero(); 3],
+        }
+    }
 }
 
 
@@ -28,18 +37,31 @@ impl Default for Material {
             albedo: Vec3::new(1.0, 1.0, 1.0),
             emission_color: Vec3::default(),
             emission_strength: 0.0,
-            roughness: 0.0,
+            roughness: 1.0,
         }
     }
 }
 
 pub struct Mesh {
     pub vertices: Vec<Vec3>,
-    pub triangles: Vec<Triangle>,
+    pub triangles: Vec<Face>,
     pub scale: Vec3,
     pub position: Vec3,
     pub rotation: Vec3,
     pub material: Material,
+}
+
+impl Default for Mesh {
+    fn default() -> Mesh {
+        Mesh {
+            vertices: Vec::default(),
+            triangles: Vec::default(),
+            scale: Vec3::default(),
+            position: Vec3::default(),
+            rotation: Vec3::default(),
+            material: Material::default(),
+        }
+    }
 }
 
 
