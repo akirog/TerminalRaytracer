@@ -10,8 +10,10 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
+RUSTFLAGS="-C target-cpu=native"
 
 [dependencies]
 macroquad = "0.4.14"
 rayon = "1.11.0"
+glam = "0.31.0"
+gltf = { version = "1.4.1", features = ["KHR_materials_emissive_strength"] }

@@ -1,5 +1,6 @@
 extern crate core;
 
+
 use macroquad::prelude::*;
 
 use std::sync::{Arc};
@@ -15,9 +16,9 @@ use crate::my3d_lib::*;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Macroquad Raytracer".to_owned(),
-        window_width: 600,
-        window_height: 300,
+        window_title: "Macro quad Raytracer".to_owned(),
+        window_width: 800,
+        window_height: 800,
         ..Default::default()
     }
 }
@@ -49,7 +50,7 @@ async fn main() {
     let height = screen_height() as usize;
     let width_ratio = width as f32 / height as f32;
 
-    let mut accumulation_buffer = vec![Vec3::zero(); width * height];
+    let mut accumulation_buffer = vec![Vec3::default(); width * height];
     let mut sample_count = 0u32;
 
     let mut debug_info: bool = true;
@@ -68,15 +69,15 @@ async fn main() {
         pitch -= delta_pos.y * mouse_sensitivity;
 
 
-        let mut forward: Vec3 = Vec3::zero();
+        let mut forward: Vec3 = Vec3::default();
         forward.x = f32::sin(yaw) * f32::cos(pitch);
         forward.y = f32::cos(yaw) * f32::cos(pitch);
         forward.z = f32::sin(pitch);
 
         let world_up = Vec3::new(0.0, 0.0, 1.0);
 
-        let right = forward.cross(world_up).normalized();
-        let up = right.cross(forward).normalized();
+        let right = forward.cross(world_up).normalize();
+        let up = right.cross(forward).normalize();
 
 
         let dt = get_frame_time();
@@ -97,8 +98,8 @@ async fn main() {
 
 
         if get_keys_down().len() > 0 || mouse_delta_position() != Vec2::default() {
-            // Reset accumulation
-            accumulation_buffer = vec![Vec3::zero(); width * height];
+            // Halve accumulation
+            accumulation_buffer = vec![Vec3::default(); width * height];
             sample_count = 0;
         }
 
@@ -129,9 +130,11 @@ async fn main() {
                 let mut dir = forward;
                 dir += right * screen_x * 1.0;
                 dir += up * screen_y * 1.0;
-                dir = dir.normalized();
+                dir = dir.normalize();
 
-                let color = cast_ray_recursive(&world_arc, pos, dir, 2);
+                let color = cast_ray_recursive(&world_arc, pos, dir, 2, frame, x, y);
+
+                let color = color.unwrap_or(Vec3::default());
 
                 *pixel = Color::new(color.x, color.y, color.z, 1.0);
             });
@@ -146,7 +149,8 @@ async fn main() {
             accumulation_buffer[i].z += pixel.b;
 
             // Compute average
-            let avg = accumulation_buffer[i] / (sample_count as f32 * 0.5);
+            let avg = accumulation_buffer[i] / (sample_count as f32);
+
 
             let x = i % width;
             let y = i / width;
@@ -190,29 +194,36 @@ fn cast_ray_recursive(
     pos: Vec3,
     dir: Vec3,
     recursions: u8,
-) -> Vec3 {
+    frame: u32,
+    screen_x: usize,
+    screen_y: usize,
+) -> Option<Vec3> {
     
-    let new_ray = cast_ray(world, pos, dir);
+    let new_ray = cast_ray(world, pos, dir, frame, screen_x, screen_y, recursions);
 
-
+    if new_ray.is_none() { return None }
+    let new_ray = new_ray.unwrap();
 
     if recursions == 0 {
         // If this is the last thing we hit we only return the light it emits since no further light could hit it
-        new_ray.material.emission_color * new_ray.material.emission_strength
+        Some(new_ray.material.emission)
 
     } else {
         // Here we get the color of the light ray when it hits us
-        let received_color = cast_ray_recursive(world, new_ray.position, new_ray.reflected_dir, recursions - 1);
+        let received_color = cast_ray_recursive(world, new_ray.position, new_ray.reflected_dir, recursions - 1, frame, screen_x, screen_y);
+
+        if received_color.is_none() { return Some( new_ray.material.emission ); }
+        let received_color = received_color.unwrap();
 
         // The amount of light this ray now has is the light we just got times our albedo, aka how much we reflect
         let mut color = received_color * new_ray.material.albedo;
 
-        let emitted_light = new_ray.material.emission_color * new_ray.material.emission_strength;
+        let emitted_light = new_ray.material.emission;
 
         color = color + emitted_light;
 
 
-        Vec3::new(color.x, color.y, color.z)
+        Some(color)
     }
 }
 
@@ -221,17 +232,19 @@ fn cast_ray(
     world: &World,
     shoot_pos: Vec3,
     shoot_dir: Vec3,
-) -> RayHit {
+    frame: u32,
+    screen_x: usize,
+    screen_y: usize,
+    recursions: u8,
+) -> Option<RayHit> {
 
     let dir: Vec3 = shoot_dir;
-
-
 
 
     let mut hit = RayHit {
         material: my3d_lib::Material::default(),
         distance: 0.0,
-        position: Vec3::zero(),
+        position: Vec3::default(),
         direction: shoot_dir,
         reflected_dir: Vec3::new(0.0, 0.0, 0.0),
     };
@@ -239,12 +252,10 @@ fn cast_ray(
     let mut shortest_distance = 1000.0;
     let mut hit_tri: Option<&Face> = None;
 
-    for mesh in &world.meshes {
-        for tri in &mesh.triangles {
+    for mesh in &world.baked_meshes {
+        for tri in &mesh.faces {
             let normal = tri.normals[0];
-            let v0 = mesh.position + mesh.vertices[tri.indices[0]];
-            let v1 = mesh.position + mesh.vertices[tri.indices[1]];
-            let v2 = mesh.position + mesh.vertices[tri.indices[2]];
+            let v0 = mesh.vertices[tri.indices[0]];
 
             let dir_to_normal = dir.dot(normal);
             if dir_to_normal > 0.001 { continue; } // almost parallel to the ray
@@ -254,8 +265,8 @@ fn cast_ray(
 
             if dist > shortest_distance { continue; }
 
-            let edge1 = v1 - v0;
-            let edge2 = v2 - v0;
+            let edge1 = tri.edges[0];
+            let edge2 = tri.edges[1];
 
             let h = dir.cross(edge2);
             let a = edge1.dot(h);
@@ -275,11 +286,11 @@ fn cast_ray(
 
             shortest_distance = dist;
             hit_tri = Some(tri);
-            hit.material = mesh.material;
+            hit.material = mesh.materials.get(tri.material_idx).unwrap().clone();
         }
     }
 
-    if !hit_tri.is_some() { return RayHit::default() }
+    if !hit_tri.is_some() { return None }
 
 
     let hit_tri = hit_tri.unwrap();
@@ -295,13 +306,10 @@ fn cast_ray(
         let roughness = hit.material.roughness * hit.material.roughness;
 
 
-        let frame = FRAME.load(Ordering::Relaxed);
-        let seed =
-            frame * 1973 ^
-            (shoot_dir.x.abs() * 1832.4) as u32 ^
-            (shoot_dir.y.abs() * 5896.9) as u32 ^
-            (shoot_dir.z.abs() * 9231.2) as u32;
-
+        let mut seed = hash_u32(frame);
+        seed = hash_u32(seed + screen_x as u32);
+        seed = hash_u32(seed + screen_y as u32);
+        seed = hash_u32(seed + recursions as u32);
 
         let mut random_dir = random_vec3(seed);
 
@@ -310,12 +318,12 @@ fn cast_ray(
         }
 
         hit.reflected_dir = hit.reflected_dir + (random_dir - hit.reflected_dir) * roughness;
-        hit.reflected_dir = hit.reflected_dir.normalized();
+        hit.reflected_dir = hit.reflected_dir.normalize();
     }
 
     hit.position = shoot_pos + shoot_dir * shortest_distance;
 
-    hit
+    Some(hit)
 }
 
 
@@ -323,60 +331,61 @@ fn cast_ray(
 
 // --- Map generation ---
 fn generate_map() -> World {
-    let mut world = World { meshes: vec![] };
+    let mut world = World { meshes: vec![], baked_meshes: vec![] };
 
-    // Floor
-    world.meshes.push(make_plane(10.0));
-
-    world.meshes[0].position = Vec3::new(0.0, 0.0, 1.0);
-    world.meshes[0].material.albedo = Vec3::new(0.22, 0.5, 0.02);
-    world.meshes[0].material.roughness = 1.0;
-
-    // A few cubes
-    let mut cube1 = make_cube(1.0);
-    cube1.position = Vec3::new(2.0, 2.0, 0.5);
-    cube1.material.albedo = Vec3::new(1.0, 0.0, 0.0);
-    cube1.material.roughness = 0.2;
-    world.meshes.push(cube1);
-
-    let mut cube2 = make_cube(0.5);
-    cube2.position = Vec3::new(-1.0, 2.0, -0.2);
-    cube2.material.emission_color = Vec3::new(1.0, 1.0, 1.0);
-    cube2.material.emission_strength = 10.0;
-
-    world.meshes.push(cube2);
-
-    let mut cube3 = make_cube(1.0);
-    cube3.position = Vec3::new(-1.0, -2.0, 0.5);
-    cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
-    cube3.material.emission_color = Vec3::new(0.0, 1.0, 0.0);
-    cube3.material.emission_strength = 3.0;
-
-    world.meshes.push(cube3);
-
-
-    let mut cube3 = make_cube(1.0);
-    cube3.position = Vec3::new(-1.0, -4.0, 0.5);
-    cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
-    cube3.material.emission_color = Vec3::new(1.0, 0.0, 0.0);
-    cube3.material.emission_strength = 3.0;
-
-    world.meshes.push(cube3);
-
-
-    let mut cube4 = make_cube(1.0);
-    cube4.position = Vec3::new(2.0, 3.2, 0.5);
-    cube4.material.albedo = Vec3::new(0.2, 1.0, 0.1);
-    cube4.material.roughness = 0.1;
-    cube4.material.emission_color = Vec3::new(0.4, 1.0, 0.4);
-    cube4.material.emission_strength = 1.0;
-    world.meshes.push(cube4);
+    // // Floor
+    // world.meshes.push(make_plane(10.0));
+    //
+    // world.meshes[0].position = Vec3::new(0.0, 0.0, 1.0);
+    // world.meshes[0].material.albedo = Vec3::new(0.22, 0.5, 0.02);
+    // world.meshes[0].material.roughness = 1.0;
+    //
+    // // A few cubes
+    // let mut cube1 = make_cube(1.0);
+    // cube1.position = Vec3::new(2.0, 2.0, 0.5);
+    // cube1.material.albedo = Vec3::new(1.0, 0.0, 0.0);
+    // cube1.material.roughness = 0.2;
+    // world.meshes.push(cube1);
+    //
+    // let mut cube2 = make_cube(0.5);
+    // cube2.position = Vec3::new(-1.0, 2.0, -0.2);
+    // cube2.material.emission_color = Vec3::new(1.0, 1.0, 1.0);
+    // cube2.material.emission_strength = 10.0;
+    //
+    // world.meshes.push(cube2);
+    //
+    // let mut cube3 = make_cube(1.0);
+    // cube3.position = Vec3::new(-1.0, -2.0, 0.5);
+    // cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
+    // cube3.material.emission_color = Vec3::new(0.0, 1.0, 0.0);
+    // cube3.material.emission_strength = 3.0;
+    //
+    // world.meshes.push(cube3);
+    //
+    //
+    // let mut cube3 = make_cube(1.0);
+    // cube3.position = Vec3::new(-1.0, -4.0, 0.5);
+    // cube3.material.albedo = Vec3::new(0.0, 0.0, 0.0);
+    // cube3.material.emission_color = Vec3::new(1.0, 0.0, 0.0);
+    // cube3.material.emission_strength = 3.0;
+    //
+    // world.meshes.push(cube3);
+    //
+    //
+    // let mut cube4 = make_cube(1.0);
+    // cube4.position = Vec3::new(2.0, 3.2, 0.5);
+    // cube4.material.albedo = Vec3::new(0.2, 1.0, 0.1);
+    // cube4.material.roughness = 0.1;
+    // cube4.material.emission_color = Vec3::new(0.4, 1.0, 0.4);
+    // cube4.material.emission_strength = 1.0;
+    // world.meshes.push(cube4);
 
 
     // Add a .obj file
-    world.meshes.push( obj_parser::parse("src/models/sphere.obj") );
+    world.meshes.extend( obj_parser::load_glb("src/models/cornell_box.glb") );
 
 
+    world.bake_meshes();
     world
 }
 
@@ -396,13 +405,15 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
         Vec3::new(-s,  s,  s), // 7
     ];
 
-    let mut triangles: Vec<Face> = Vec::new();
+    let mut faces: Vec<Face> = Vec::new();
 
     // helper to add a triangle by vertex indices and normal
     let mut add_tri = |a, b, c, normal: Vec3| {
-        triangles.push(Face {
+        faces.push(Face {
             indices: [a, b, c],
             normals: [normal; 3],
+            material_idx: 0,
+            ..Default::default()
         });
     };
 
@@ -440,11 +451,11 @@ pub fn make_cube(size: f32) -> my3d_lib::Mesh {
 
     my3d_lib::Mesh {
         vertices,
-        triangles,
+        faces,
         scale: Vec3::new(1.0, 1.0, 1.0),
         position: Vec3::new(0.0, 0.0, 0.0),
-        rotation: Vec3::new(0.0, 0.0, 0.0),
-        material: my3d_lib::Material::default(),
+        rotation: ::glam::Quat::default(),
+        materials: vec![my3d_lib::Material::default()],
     }
 }
 
@@ -458,21 +469,21 @@ fn make_plane(scale: f32) -> my3d_lib::Mesh {
         Vec3::new( s, s,  0.0),
     ];
 
-    let mut triangles: Vec<Face> = Vec::new();
+    let mut faces: Vec<Face> = Vec::new();
 
     let normal = Vec3::new(0.0, 0.0, -1.0);
 
-    triangles.push(Face { indices: [0, 1, 2], normals: [normal, normal, normal] });
-    triangles.push(Face { indices: [3, 1, 2], normals: [normal, normal, normal] });
+    faces.push(Face { indices: [0, 1, 2], normals: [normal, normal, normal], material_idx: 0, ..Default::default() });
+    faces.push(Face { indices: [3, 1, 2], normals: [normal, normal, normal], material_idx: 0, ..Default::default() });
 
 
     my3d_lib::Mesh {
         vertices,
-        triangles,
+        faces,
         scale: Vec3::splat(1.0),
         position: Vec3::new(0.0, 0.0, 0.0),
-        rotation: Vec3::new(0.0, 0.0, 0.0),
-        material: my3d_lib::Material::default(),
+        rotation: ::glam::Quat::default(),
+        materials: vec![my3d_lib::Material::default()],
     }
 }
 
