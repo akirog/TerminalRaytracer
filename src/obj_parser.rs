@@ -16,7 +16,8 @@ pub fn load_glb(path: &str) -> Vec<Mesh> {
         let pbr = mat.pbr_metallic_roughness();
         let base = pbr.base_color_factor();
         let albedo = Vec3::new(base[0] as f32, base[1] as f32, base[2] as f32);
-
+        
+        
         let emissive = mat.emissive_factor();
         let mut emission = Vec3::new(emissive[0] as f32, emissive[1] as f32, emissive[2] as f32);
         if let Some(strength) = mat.emissive_strength() {

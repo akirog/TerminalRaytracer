@@ -17,8 +17,8 @@ use crate::my3d_lib::*;
 fn window_conf() -> Conf {
     Conf {
         window_title: "Macro quad Raytracer".to_owned(),
-        window_width: 800,
-        window_height: 800,
+        window_width: 600,
+        window_height: 400,
         ..Default::default()
     }
 }
@@ -33,10 +33,13 @@ async fn main() {
     let world: World  = generate_map();
     let world_arc = Arc::new(world); // Move map into Arc
 
-    // Player state
+    // Camera state
     let mut pos = Vec3::new(0.0, 0.0, 0.0);
     let mut yaw: f32 = 0.0;
     let mut pitch: f32 = 0.0;
+
+    let mut focal_distance: f32 = 4.0;
+    let mut aperture_radius = 0.05;
 
     let speed: f32 = 2.0;
     let mouse_sensitivity: f32 = 0.2;
@@ -54,6 +57,20 @@ async fn main() {
     let mut sample_count = 0u32;
 
     let mut debug_info: bool = true;
+    let mut input_locked: bool = false;
+    let mut display_image: bool = true;
+    let mut change_focal: bool = false;
+
+
+    let mut forward: Vec3 = Vec3::default();
+    forward.x = f32::sin(yaw) * f32::cos(pitch);
+    forward.y = f32::cos(yaw) * f32::cos(pitch);
+    forward.z = f32::sin(pitch);
+
+    let world_up = Vec3::new(0.0, 0.0, 1.0);
+
+    let mut right = forward.cross(world_up).normalize();
+    let mut up = right.cross(forward).normalize();
 
 
     loop {
@@ -63,45 +80,60 @@ async fn main() {
         let frame = FRAME.fetch_add(1, Ordering::Relaxed);
 
 
-        // --- Input ---
-        let delta_pos = mouse_delta_position();
-        yaw -= delta_pos.x * mouse_sensitivity;
-        pitch -= delta_pos.y * mouse_sensitivity;
-
-
-        let mut forward: Vec3 = Vec3::default();
-        forward.x = f32::sin(yaw) * f32::cos(pitch);
-        forward.y = f32::cos(yaw) * f32::cos(pitch);
-        forward.z = f32::sin(pitch);
-
-        let world_up = Vec3::new(0.0, 0.0, 1.0);
-
-        let right = forward.cross(world_up).normalize();
-        let up = right.cross(forward).normalize();
-
-
-        let dt = get_frame_time();
-        let amount = speed * dt;
-
-        if is_key_down(KeyCode::W) { pos += forward * amount; }
-        if is_key_down(KeyCode::S) { pos -= forward * amount; }
-
-        if is_key_down(KeyCode::D) { pos += right * amount; }
-        if is_key_down(KeyCode::A) { pos -= right * amount; }
-
-        if is_key_down(KeyCode::Space)     { pos -= up * amount; }
-        if is_key_down(KeyCode::LeftShift) { pos += up * amount; }
+        if is_key_pressed(KeyCode::G) { debug_info ^= true; };
+        if is_key_pressed(KeyCode::L) { input_locked ^= true; };
+        if is_key_pressed(KeyCode::U) { display_image ^= true; };
+        if is_key_pressed(KeyCode::R) { change_focal ^= true; };
 
         if is_key_down(KeyCode::Escape) { break; }
 
-        if is_key_pressed(KeyCode::G) { debug_info ^= true; };
+        // --- Input ---
+        if !input_locked {
+            let delta_pos = mouse_delta_position();
+            yaw -= delta_pos.x * mouse_sensitivity;
+            pitch -= delta_pos.y * mouse_sensitivity;
 
 
-        if get_keys_down().len() > 0 || mouse_delta_position() != Vec2::default() {
-            // Halve accumulation
-            accumulation_buffer = vec![Vec3::default(); width * height];
-            sample_count = 0;
+
+            forward.x = f32::sin(yaw) * f32::cos(pitch);
+            forward.y = f32::cos(yaw) * f32::cos(pitch);
+            forward.z = f32::sin(pitch);
+
+            right = forward.cross(world_up).normalize();
+            up = right.cross(forward).normalize();
+
+
+
+            let dt = get_frame_time();
+            let amount = speed * dt;
+
+            if is_key_down(KeyCode::W) { pos += forward * amount; }
+            if is_key_down(KeyCode::S) { pos -= forward * amount; }
+
+            if is_key_down(KeyCode::D) { pos += right * amount; }
+            if is_key_down(KeyCode::A) { pos -= right * amount; }
+
+            if is_key_down(KeyCode::Space)     { pos -= up * amount; }
+            if is_key_down(KeyCode::LeftShift) { pos += up * amount; }
+
+
+            if mouse_wheel().1 > 0.0 {
+                if change_focal {
+                    focal_distance += mouse_wheel().1/1000.0;
+                } else {
+                    aperture_radius += mouse_wheel().1/10000.0;
+                }
+            }
+
+
+
+            if get_keys_down().len() > 0 || mouse_delta_position() != Vec2::default() || mouse_wheel().1 != 0.0 {
+                // Halve accumulation
+                accumulation_buffer = vec![Vec3::default(); width * height];
+                sample_count = 0;
+            }
         }
+
 
 
         // --- Rendering ---
@@ -113,7 +145,7 @@ async fn main() {
 
         let inv_width = 1.0 / width as f32;
         let inv_height = 1.0 / height as f32;
-
+        let focal_pos = pos + forward * focal_distance;
 
         // Parallel iteration over pixels
         pixels.par_iter_mut()
@@ -127,12 +159,35 @@ async fn main() {
                 let screen_y = (y as f32 * inv_height - 0.5) * 2.0;
 
 
-                let mut dir = forward;
-                dir += right * screen_x * 1.0;
-                dir += up * screen_y * 1.0;
-                dir = dir.normalize();
+                let image_plane_center = pos + forward * focal_distance;
 
-                let color = cast_ray_recursive(&world_arc, pos, dir, 2, frame, x, y);
+                let pixel_world =
+                    image_plane_center
+                        + screen_x * right
+                        + screen_y * up;
+
+                // focus target
+                let focal_point = pixel_world;
+
+                // random lens offset
+                let mut seed = hash_u32(frame);
+                seed ^= screen_x as u32;
+                seed ^= screen_y as u32;
+
+                let disk = random_in_unit_disk(seed);
+
+                let lens_offset =
+                    right * disk.x * aperture_radius +
+                        up    * disk.y * aperture_radius;
+
+                let ray_origin = pos + lens_offset;
+                let ray_dir = (focal_point - ray_origin).normalize();
+
+
+
+                let recursions: u8 = 4;
+
+                let color = cast_ray_recursive(&world_arc, ray_origin, ray_dir, recursions, frame, x, y);
 
                 let color = color.unwrap_or(Vec3::default());
 
@@ -148,37 +203,46 @@ async fn main() {
             accumulation_buffer[i].y += pixel.g;
             accumulation_buffer[i].z += pixel.b;
 
-            // Compute average
-            let avg = accumulation_buffer[i] / (sample_count as f32);
+            if display_image {
+                // Compute average
+                let avg = accumulation_buffer[i] / (sample_count as f32);
 
 
-            let x = i % width;
-            let y = i / width;
-            image.set_pixel(x as u32, y as u32,
-                            Color::new(avg.x, avg.y, avg.z, 1.0)
-            );
+                let x = i % width;
+                let y = i / width;
+                image.set_pixel(x as u32, y as u32,
+                                Color::new(avg.x, avg.y, avg.z, 1.0)
+                );
+            }
         }
 
 
 
 
-        // Draw image to screen
-        let texture = Texture2D::from_image(&image);
-        draw_texture_ex(
-            &texture,
-            0.0,
-            0.0,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(screen_width(), screen_height())),
-                ..Default::default()
-            },
-        );
+        if display_image {
+            // Draw image to screen
+            let texture = Texture2D::from_image(&image);
+            draw_texture_ex(
+                &texture,
+                0.0,
+                0.0,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(screen_width(), screen_height())),
+                    ..Default::default()
+                },
+            );
+        }
 
         // if debug is on draw some debug stuff
         if debug_info {
             draw_text(&*format!("Sample count: {}", sample_count), 5.0, 20.0, 20.0, WHITE);
             draw_text(&*format!("FPS: {}", get_fps()), 5.0, 40.0, 20.0, WHITE);
+            draw_text(&*format!("Focal distance: {}", focal_distance), 5.0, 60.0, 20.0, WHITE);
+            draw_text(&*format!("Aperture radius: {}", aperture_radius), 5.0, 80.0, 20.0, WHITE);
+
+            let ideal_distance = cast_ray(&world_arc, pos, forward, frame, 0, 0, 0).unwrap_or(RayHit::default()).distance;
+            draw_text(&*format!("Ideal focal distance: {}", ideal_distance), 5.0, 100.0, 20.0, WHITE);
         }
 
         next_frame().await;
@@ -511,4 +575,15 @@ fn random_vec3(seed: u32) -> Vec3 {
     let z = hash_f32(seed ^ 0xB492F11D) * 2.0 - 1.0;
 
     Vec3::new(x, y, z)
+}
+
+
+fn random_in_unit_disk(seed: u32) -> Vec3 {
+    let r1 = hash_f32(seed);
+    let r2 = hash_f32(seed ^ 0x9E3779B9);
+
+    let r = r1.sqrt();
+    let theta = r2 * std::f32::consts::TAU;
+
+    Vec3::new(r * theta.cos(), r * theta.sin(), 0.0)
 }
