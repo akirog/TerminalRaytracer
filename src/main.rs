@@ -116,12 +116,33 @@ async fn main() {
             if is_key_down(KeyCode::Space)     { pos -= up * amount; }
             if is_key_down(KeyCode::LeftShift) { pos += up * amount; }
 
+            if is_key_down(KeyCode::Q) {
+                let ideal_distance = (cast_ray(&world_arc, pos, forward, frame, 0, 0, 0).unwrap_or(RayHit::default()).position - pos).length();
 
-            if mouse_wheel().1 > 0.0 {
+                focal_distance = ideal_distance;
+            }
+
+            if mouse_wheel().1 != 0.0 {
                 if change_focal {
                     focal_distance += mouse_wheel().1/1000.0;
                 } else {
                     aperture_radius += mouse_wheel().1/10000.0;
+                }
+            }
+
+            if is_key_down(KeyCode::Up) {
+                if change_focal {
+                    focal_distance += 0.02;
+                } else {
+                    aperture_radius += 0.002;
+                }
+            }
+
+            if is_key_down(KeyCode::Down) {
+                if change_focal {
+                    focal_distance -= 0.02;
+                } else {
+                    aperture_radius -= 0.002;
                 }
             }
 
@@ -241,7 +262,7 @@ async fn main() {
             draw_text(&*format!("Focal distance: {}", focal_distance), 5.0, 60.0, 20.0, WHITE);
             draw_text(&*format!("Aperture radius: {}", aperture_radius), 5.0, 80.0, 20.0, WHITE);
 
-            let ideal_distance = cast_ray(&world_arc, pos, forward, frame, 0, 0, 0).unwrap_or(RayHit::default()).distance;
+            let ideal_distance = (cast_ray(&world_arc, pos, forward, frame, 0, 0, 0).unwrap_or(RayHit::default()).position - pos).length();
             draw_text(&*format!("Ideal focal distance: {}", ideal_distance), 5.0, 100.0, 20.0, WHITE);
         }
 
@@ -322,7 +343,7 @@ fn cast_ray(
             let v0 = mesh.vertices[tri.indices[0]];
 
             let dir_to_normal = dir.dot(normal);
-            if dir_to_normal > 0.001 { continue; } // almost parallel to the ray
+            if dir_to_normal > 0.1 { continue; } // almost parallel to the ray
 
             let dist = (v0 - shoot_pos).dot(normal) / dir_to_normal;
             if dist < 0.0 { continue; } // plane is behind us
